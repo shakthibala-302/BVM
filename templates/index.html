@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121719">
+  <title>Airway Bench Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" focusable="false">
+            <circle cx="24" cy="24" r="19" />
+            <path d="M9 25h7l4-9 7 17 5-12 4 4h4" />
+          </svg>
+        </div>
+      </div>
+      <div class="header-status">
+        {% if simulated %}<span class="source-badge simulated-badge"><i></i> SIMULATED DATA</span>{% endif %}
+        <span class="source-badge" id="connection-badge"><i></i><span id="connection-label">WAITING FOR DATA</span></span>
+        <span class="header-time" id="header-clock">--:--:--</span>
+      </div>
+    </header>
+
+    <main>
+      <div class="safety-banner" role="note">Prototype - test lung only. Not clinically validated.</div>
+      <div class="alert-banner alarm-banner" id="alarm-banner" role="alert" aria-live="assertive" hidden>
+        <span class="alert-symbol" aria-hidden="true">!</span>
+        <div><strong>PRESSURE LIMIT</strong><span id="alarm-message">Pressure limit reached.</span></div>
+      </div>
+      <div class="alert-banner stale-banner" id="stale-banner" role="status" aria-live="polite" hidden>
+        <span class="alert-symbol" aria-hidden="true">!</span>
+        <div><strong>DATA DELAY</strong><span>No data received for 2 seconds.</span></div>
+      </div>
+
+      <section class="overview-grid" aria-label="Current readings">
+        <article class="reading-card pressure-card">
+          <div class="card-heading">
+            <span class="card-label">AIRWAY PRESSURE</span>
+            <div class="unit-switch" role="group" aria-label="Pressure unit">
+              <button type="button" class="unit-button active" data-unit="kPa" aria-pressed="true">kPa</button>
+              <button type="button" class="unit-button" data-unit="cmH2O" aria-pressed="false">cmH₂O</button>
+            </div>
+          </div>
+          <div class="pressure-value-row"><strong id="current-pressure">--.-</strong><span id="pressure-unit">kPa</span></div>
+          <div class="pressure-foot"><span class="live-dot"></span><span id="reading-status">Awaiting sample</span></div>
+        </article>
+        <article class="reading-card">
+          <span class="card-label">PEAK · LAST CYCLE</span>
+          <div class="metric-value"><strong id="peak-pressure">--.-</strong><span class="metric-unit" id="peak-unit">kPa</span></div>
+          <span class="metric-caption">completed cycle</span>
+        </article>
+        <article class="reading-card">
+          <span class="card-label">CYCLES / MIN</span>
+          <div class="metric-value"><strong id="cycle-rate">--</strong><span class="metric-unit">/min</span></div>
+          <span class="metric-caption">rolling 60 seconds</span>
+        </article>
+        <article class="reading-card">
+          <span class="card-label">TOTAL CYCLES</span>
+          <div class="metric-value"><strong id="total-cycles">--</strong></div>
+          <span class="metric-caption">from controller</span>
+        </article>
+        <article class="reading-card state-card">
+          <span class="card-label">CURRENT STATE</span>
+          <div class="state-value"><span class="state-indicator" id="state-indicator"></span><strong id="current-state">--</strong></div>
+          <span class="metric-caption">motor state from ESP32</span>
+        </article>
+        <article class="reading-card mode-card">
+          <span class="card-label">CURRENT MODE</span>
+          <div class="metric-value"><strong id="current-mode">--</strong></div>
+          <span class="metric-caption">reported by controller</span>
+        </article>
+      </section>
+
+      <section class="chart-panel panel" aria-labelledby="chart-title">
+        <div class="section-heading chart-heading">
+          <div>
+            <p class="eyebrow">LIVE TRACE</p>
+            <h2 id="chart-title">Airway pressure</h2>
+          </div>
+          <div class="chart-legend"><span class="legend-pressure"></span> Pressure <span class="legend-limit"></span> Set pressure limit</div>
+        </div>
+        <div class="chart-wrap"><canvas id="pressure-chart" aria-label="Pressure over the last 30 seconds"></canvas></div>
+      </section>
+
+      <div class="detail-grid">
+        <section class="panel mode-panel" aria-labelledby="mode-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">STUDY SETTINGS</p><h2 id="mode-title">Mode parameters</h2></div>
+            <span class="placeholder-tag">PLACEHOLDER VALUES</span>
+          </div>
+          <p class="mode-name" id="mode-name">Awaiting mode</p>
+          <table class="data-table parameter-table">
+            <tbody>
+              <tr><th scope="row">Pressure limit</th><td id="mode-limit">--</td></tr>
+              <tr><th scope="row">Compression time</th><td id="mode-compression">--</td></tr>
+              <tr><th scope="row">Target rate</th><td id="mode-rate">--</td></tr>
+            </tbody>
+          </table>
+          <p class="study-note">Study placeholders only. Not clinical protocols.</p>
+        </section>
+
+        <section class="panel cycle-panel" aria-labelledby="cycle-title">
+          <div class="section-heading cycle-heading">
+            <div><p class="eyebrow">RECENT PERFORMANCE</p><h2 id="cycle-title">Cycle-by-cycle</h2></div>
+            <div class="spread-readout"><span>PEAK SPREAD</span><strong id="peak-spread">--</strong></div>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table cycle-table">
+              <thead><tr><th scope="col">Cycle</th><th scope="col">Peak pressure</th><th scope="col">Compression</th></tr></thead>
+              <tbody id="cycle-rows"><tr class="empty-row"><td colspan="3">Cycle data will appear after the first compression.</td></tr></tbody>
+            </table>
+          </div>
+          <p class="study-note">Spread is max minus min peak across the cycles shown.</p>
+        </section>
+      </div>
+
+      <section class="recording-bar panel" aria-label="Recording and export">
+        <div class="recording-copy"><span class="record-indicator" id="record-indicator"></span><div><strong id="recording-state">Recording off</strong><span id="recording-count">No samples captured</span></div></div>
+        <div class="recording-actions">
+          <button type="button" class="button button-record" id="record-button"><span class="button-icon" aria-hidden="true">●</span>Start recording</button>
+          <button type="button" class="button button-export" id="download-button" disabled><span class="download-icon" aria-hidden="true">↓</span>Download CSV</button>
+        </div>
+      </section>
+      <p class="footer-note">Display only · No controls are sent to the motor · Verify sensor calibration against a reference gauge</p>
+    </main>
+  </div>
+
+  <script>
+    window.BVM_MODE_CONFIG = {{ mode_config|tojson }};
+    window.BVM_SIMULATED = {{ simulated|tojson }};
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
